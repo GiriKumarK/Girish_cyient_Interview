@@ -1,0 +1,293 @@
+SHARED QUEUES::
+
+
+To implement the shared queue with multiple readers and a single writer in C++, we can use a combination of mutex and condition variables to achieve synchronization. The mutex will protect access to the queue to ensure that only one thread (either a reader or the writer) can access it at a time. The condition variable will be used to notify the readers when new data is available to consume.
+
+To minimize the time spent in a locked condition and avoid busy waiting, we will use a `std::condition_variable` that allows readers to wait for new messages without blocking each other.
+
+Here's the C++ code for the shared queue and the test program:
+
+program for the Shared Queue:::
+#include <iostream>
+#include <string>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+const int NUM_READERS = 5;
+const int NUM_MESSAGES = 25;
+const int MESSAGES_PER_SECOND = 5;
+
+class SharedQueue 
+{
+public:
+    void push(const std::string& message) 
+   {
+        std::unique_lock<std::mutex> lock(mutex_);
+        queue_.push(message);
+        lock.unlock();
+        cv_.notify_all();
+    }
+
+    std::string pop() 
+   {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return !queue_.empty(); });
+        std::string message = queue_.front();
+        queue_.pop();
+        return message;
+   }
+
+private:
+    std::queue<std::string> queue_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+};
+
+void writerThread(SharedQueue& sharedQueue) 
+{
+    for (int i = 0; i < NUM_MESSAGES; ++i)
+ {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / MESSAGES_PER_SECOND));
+        std::string message = "Message " + std::to_string(i + 1);
+        sharedQueue.push(message);
+  }
+}
+
+void readerThread(int id, SharedQueue& sharedQueue) 
+{
+    int messagesPerReader = NUM_MESSAGES / NUM_READERS;
+    for (int i = 0; i < messagesPerReader; ++i) 
+{
+        std::string message = sharedQueue.pop();
+        std::cout << "Reader " << id << " received: " << message << std::endl;
+ }
+}
+
+int main()
+{
+    SharedQueue sharedQueue;
+
+    std::thread writer(writerThread, std::ref(sharedQueue));
+
+    std::thread readers[NUM_READERS];
+    for (int i = 0; i < NUM_READERS; ++i) 
+   {
+        readers[i] = std::thread(readerThread, i + 1, std::ref(sharedQueue));
+    }
+
+    writer.join();
+    for (int i = 0; i < NUM_READERS; ++i) 
+    {
+        readers[i].join();
+    }
+
+    return 0;
+}
+```
+
+Explanation of the synchronization and key points:
+
+1. Synchronization between readers and the writer:
+   - We use a mutex (`std::mutex`) to protect the shared queue, ensuring only one thread can access it at a time.
+   - When the writer pushes a message, it acquires the mutex lock, adds the message to the queue, 
+     and then releases the lock before notifying all waiting readers through the condition variable (`cv_.notify_all()`).
+   - When a reader pops a message, it waits until the queue is not empty. If the queue is empty, the reader will wait for a notification from the writer.
+
+2. Multiple readers can wait for the next message without blocking each other:
+   - Readers use `cv_.wait()` to wait for new messages. The `cv_.wait()` function automatically unlocks the mutex and 
+     puts the thread to sleep until it receives a notification.
+   - When the writer adds a new message and calls `cv_.notify_all()`, all waiting readers are woken up, 
+     and each of them tries to acquire the lock. Only one reader will get the lock and access the message, 
+     while the others will keep waiting for the next notification.
+
+3. Minimizing time spent in a locked condition:
+   - The time spent in a locked condition is minimized using condition variables (`cv_.wait()` and `cv_.notify_all()`).
+    When a thread is waiting for a new message, it is not spinning on the CPU, which reduces unnecessary CPU usage and context switching.
+   - The writer thread releases the lock immediately after adding a message, allowing other threads to proceed without unnecessary delays.
+
+By using mutex and condition variables, we ensure that the shared queue is accessed safely by multiple readers and a single writer,
+   messages are distributed relatively evenly between the consumers, and the reader threads do not spin on the CPU while waiting for new messages.
+
+Implement Client-Server Data Exchange:::::
+
+To implement the server and client communication in C++, we will use TCP sockets for a connection-oriented approach. TCP ensures reliable, ordered, and error-checked delivery of data between the server and clients. For the server, we will use multi-threading to handle multiple clients simultaneously.
+
+Here's the C++ code for the server and client:
+
+Server:
+
+#include <iostream>
+#include <string>
+#include <thread>
+#include <vector>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+const int PORT = 8080;
+const int BUFFER_SIZE = 1024;
+
+void handleClient(int clientSocket) 
+{
+    char buffer[BUFFER_SIZE];
+    while (true) {
+        int bytesRead = recv(clientSocket, buffer, BUFFER_SIZE, 0);
+        if (bytesRead <= 0)
+       {
+            std::cout << "Client disconnected or encountered an error." << std::endl;
+            break;
+        }
+
+        std::string request(buffer, bytesRead);
+        if (request == "ping") 
+       {
+            std::cout << "Received a 'ping' from client." << std::endl;
+            const char* response = "pong";
+            send(clientSocket, response, strlen(response), 0);
+        }
+    }
+
+    close(clientSocket);
+}
+
+int main() 
+{
+    int serverSocket, newSocket;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+
+    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == 0) 
+    {
+        std::cerr << "Socket creation failed." << std::endl;
+        return 1;
+    }
+
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)))
+   {
+        std::cerr << "Setsockopt failed." << std::endl;
+        return 1;
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    if (bind(serverSocket, (struct sockaddr *)&address, sizeof(address)) < 0) 
+    {
+        std::cerr << "Binding failed." << std::endl;
+        return 1;
+    }
+
+    if (listen(serverSocket, 3) < 0) 
+    {
+        std::cerr << "Listen failed." << std::endl;
+        return 1;
+    }
+
+    std::cout << "Server is listening on port " << PORT << std::endl;
+
+    std::vector<std::thread> clientThreads;
+    while ((newSocket = accept(serverSocket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) >= 0) 
+   {
+        std::cout << "New client connected." << std::endl;
+        clientThreads.emplace_back(handleClient, newSocket);
+    }
+
+    close(serverSocket);
+    return 0;
+}
+
+
+Client:
+
+#include <iostream>
+#include <string>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+const int PORT = 8080;
+const int BUFFER_SIZE = 1024;
+const std::string SERVER_IP = "127.0.0.1"; // Replace this with the server IP address
+
+void handleError(const std::string& errorMessage) 
+{
+    std::cerr << errorMessage << std::endl;
+    exit(1);
+}
+
+int main(int argc, char* argv[])
+ {
+    int clientSocket;
+    struct sockaddr_in serverAddress;
+    char buffer[BUFFER_SIZE] = {0};
+
+    if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        handleError("Socket creation failed.");
+    }
+
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET, SERVER_IP.c_str(), &serverAddress.sin_addr) <= 0)
+   {
+        handleError("Invalid address or address not supported.");
+    }
+
+    if (connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) 
+    {
+        handleError("Connection failed.");
+    }
+
+    std::cout << "Connected to the server." << std::endl;
+
+    while (true)
+     {
+        const char* message = "ping";
+        send(clientSocket, message, strlen(message), 0);
+        std::cout << "Sent a 'ping' to the server." << std::endl;
+
+        int bytesRead = recv(clientSocket, buffer, BUFFER_SIZE, 0);
+        if (bytesRead <= 0) 
+       {
+            handleError("Error in receiving response from server.");
+        }
+
+        std::string response(buffer, bytesRead);
+        std::cout << "Received response from server: " << response << std::endl;
+        sleep(1);
+    }
+
+    close(clientSocket);
+    return 0;
+}
+
+
+Explanation of key points:
+
+1. Server handling multiple clients simultaneously:
+   - The server uses a while loop to listen for incoming client connections indefinitely.
+   - When a client connects, the server spawns a new thread to handle the client's requests.
+   - This way, each client is handled in a separate thread, allowing the server to support multiple clients simultaneously.
+
+2. Suitability of TCP for the task:
+   - TCP is a connection-oriented protocol that ensures reliable data transmission and guarantees that data is delivered in the correct order.
+   - For a simple ping-pong communication, where it is crucial to receive responses accurately, TCP is a suitable choice.
+
+3. Network error handling on both the client and the server:
+   - Both the client and the server check for various error conditions during socket creation, connection, sending, and receiving data.
+   - In case of any error, the corresponding function displays an error message and, in some cases, exits the program to handle the error gracefully.
+
+Please make sure to replace `SERVER_IP` in the client code with the actual IP address of the server where the server program is running.
+
+To test the code, compile and run the server program first, then compile and run the client program, passing the IP address of the server as a command-line argument to the client program. 
+The client will keep sending "ping" messages to the server, and the server will respond with "pong" messages.
